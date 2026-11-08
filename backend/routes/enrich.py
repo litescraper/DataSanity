@@ -11,6 +11,32 @@ def enrich_data(df: Optional[pd.DataFrame], prompt: str) -> str:
     """
     if df is None:
         return "No data provided for enrichment"
+
+    # Opt-in search shares only the user's query, never dataset rows.
+    provider = os.getenv("SEARCH_PROVIDER")
+    if provider == "litescrape":
+        api_key = os.getenv("LITESCRAPE_API_KEY")
+        if not api_key:
+            return "Error: Set LITESCRAPE_API_KEY for web search"
+        base_url = (os.getenv("LITESCRAPE_BASE_URL") or "https://api.litescrape.com").rstrip("/")
+        try:
+            response = httpx.get(
+                base_url + "/api/google/search", params={"q": prompt, "num": 5},
+                headers={"Authorization": f"Bearer {api_key}"}, timeout=30,
+            )
+            response.raise_for_status()
+            results = response.json().get("organic_results", [])
+            context = [
+                f"Title: {item.get('title', '')}\nSource: {item['link']}\nSnippet: {item.get('snippet', '')}"
+                for item in results if item.get("link")
+            ]
+            return "Retrieved web context (not per-row validation):\n\n" + ("\n\n".join(context) or "No results found")
+        except httpx.HTTPStatusError as exc:
+            return f"Error: Web search returned HTTP {exc.response.status_code}"
+        except httpx.RequestError:
+            return "Error: Web search request failed"
+    if provider:
+        return "Error: Unsupported SEARCH_PROVIDER"
     
     # Load the enrichment prompt template
     template_path = os.path.join(os.path.dirname(__file__), "..", "prompts", "enrich_template.txt")
